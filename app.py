@@ -2,13 +2,19 @@ import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
 
-from fastapi import FastAPI, File, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, File, UploadFile, Request, Response
+from fastapi.responses import HTMLResponse, RedirectResponse
 from PIL import Image
 import io
+import uuid
 
-history = []
+
+# -----------------------------
+# Session History Store
+# -----------------------------
+user_history = {}
 MAX_HISTORY = 5
+
 
 # -----------------------------
 # App
@@ -119,10 +125,28 @@ def predict_image(image):
 
 
 # -----------------------------
+# Health Check (HF Safe)
+# -----------------------------
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
+# -----------------------------
 # Homepage (UI)
 # -----------------------------
-@app.get("/", response_class=HTMLResponse)
-def home():
+@app.api_route("/", methods=["GET"], response_class=HTMLResponse)
+def home(request: Request, response: Response):
+
+    # Get / create session id
+    session_id = request.cookies.get("session_id")
+
+    if not session_id:
+        session_id = str(uuid.uuid4())
+        response.set_cookie("session_id", session_id)
+
+    history = user_history.get(session_id, [])
+
 
     history_html = ""
 
@@ -195,21 +219,6 @@ def home():
                 display: none;
             }}
 
-            .bar-bg {{
-                width: 100%;
-                background: #333;
-                border-radius: 6px;
-                margin: 10px 0;
-            }}
-
-            .bar {{
-                height: 20px;
-                width: 0%;
-                background: #00ffcc;
-                border-radius: 6px;
-                transition: width 0.5s;
-            }}
-
             .history {{
                 margin-top: 20px;
                 text-align: left;
@@ -243,11 +252,6 @@ def home():
             <p>Upload an image to classify using CNN</p>
 
             <img id="preview">
-
-            <div class="bar-bg">
-                <div id="conf-bar" class="bar"></div>
-            </div>
-
 
             <form action="/predict_ui" method="post" enctype="multipart/form-data">
 
@@ -294,14 +298,34 @@ def home():
 
 
 # -----------------------------
-# UI Prediction Endpoint
+# Redirect GET
+# -----------------------------
+@app.get("/predict_ui")
+def predict_ui_get():
+    return RedirectResponse("/")
+
+
+# -----------------------------
+# UI Prediction
 # -----------------------------
 @app.post("/predict_ui", response_class=HTMLResponse)
-async def predict_ui(file: UploadFile = File(...)):
+async def predict_ui(
+    request: Request,
+    response: Response,
+    file: UploadFile = File(...)
+):
 
-    global history
+    # Session id
+    session_id = request.cookies.get("session_id")
+
+    if not session_id:
+        session_id = str(uuid.uuid4())
+        response.set_cookie("session_id", session_id)
+
+    history = user_history.get(session_id, [])
 
 
+    # Read image
     data = await file.read()
 
     image = Image.open(io.BytesIO(data)).convert("RGB")
@@ -317,6 +341,8 @@ async def predict_ui(file: UploadFile = File(...)):
 
     if len(history) > MAX_HISTORY:
         history.pop(0)
+
+    user_history[session_id] = history
 
 
     percent = int(conf * 100)
@@ -424,4 +450,3 @@ async def predict_ui(file: UploadFile = File(...)):
     </body>
     </html>
     """
-
